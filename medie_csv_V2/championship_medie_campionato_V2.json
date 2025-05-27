@@ -1,0 +1,19 @@
+{
+    "media_gol_casa_campionato": 1.4583333333333333,
+    "media_gol_trasferta_campionato": 1.1077898550724639,
+    "media_gol_1T_casa_campionato": 0.6657608695652174,
+    "media_gol_1T_trasferta_campionato": 0.4990942028985507,
+    "media_tiri_casa_campionato": 13.632246376811594,
+    "media_tiri_trasferta_campionato": 10.732789855072463,
+    "media_tiri_porta_casa_campionato": 4.484601449275362,
+    "media_tiri_porta_trasferta_campionato": 3.5969202898550723,
+    "media_corner_casa_campionato": 5.881340579710145,
+    "media_corner_trasferta_campionato": 4.53713768115942,
+    "media_falli_casa_campionato": 10.883152173913043,
+    "media_falli_trasferta_campionato": 11.479166666666666,
+    "media_gialli_casa_campionato": 1.752717391304348,
+    "media_gialli_trasferta_campionato": 2.073369565217391,
+    "media_rossi_casa_campionato": 0.043478260869565216,
+    "media_rossi_trasferta_campionato": 0.06521739130434782,
+    "num_squadre_campionato": 24
+}
