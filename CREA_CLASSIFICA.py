@@ -5,69 +5,85 @@ import shutil
 import subprocess
 
 # === CONFIGURAZIONE ===
-CARTELLA_CSV = "./dati_csv"
-CARTELLA_CLASSIFICHE_OUTPUT = "./classifiche_csv"
-CAMPIONATI = {
-    "serie_a": "I1", "serie_b": "I2", "premier": "E0", "championship": "E1",
-    "bundesliga": "D1", "2bundesliga": "D2", "ligue1": "F1", "ligue2": "F2",
-    "la_liga": "SP1", "laliga2": "SP2", "jupiler_league": "B1",
-    "eredivisie": "N1", "liga_1": "P1"
-}
+CARTELLA_DATI_CSV = "./dati_csv" # Da dove leggere i file delle partite scaricati
+CARTELLA_CLASSIFICHE_CORRENTI = "./classifiche_csv" # Dove salvare le classifiche "attuali" (ultima stagione disponibile)
+CARTELLA_CLASSIFICHE_STORICHE = "./classifiche_storiche_csv" # NUOVA: Dove salvare le classifiche finali storiche
+
+# CAMPIONATI è definito in CSV.py, ma qui ci serve per iterare sui nomi dei file.
+# Potremmo importarlo o ridefinire i nomi base se necessario.
+# Per ora assumiamo che i nomi file in CARTELLA_DATI_CSV seguano il pattern NOMEBASE_CAMPIONATO_STAGIONE.csv
+# es. serie_a_2324.csv. Useremo glob per trovare i file.
 
 # === FUNZIONI DI UTILITÀ (le stesse degli altri script) ===
 
-def svuota_cartella(path):
-    """Svuota una cartella eliminando file e sottodirectory."""
+def svuota_e_crea_cartella(path):
+    """Svuota una cartella eliminando file e sottodirectory, poi la ricrea."""
     if os.path.exists(path):
         shutil.rmtree(path)
     os.makedirs(path)
     print(f"🧹 Cartella '{path}' svuotata e ricreata.")
 
-def git_push(commit_msg="Aggiornamento classifiche campionati"):
-    """Aggiunge la cartella delle classifiche, committa e pusha su Git."""
+def git_push_classifiche(commit_msg="Aggiornamento classifiche correnti e storiche"):
+    """Aggiunge le cartelle delle classifiche, committa e pusha su Git."""
     try:
-        subprocess.run(["git", "add", CARTELLA_CLASSIFICHE_OUTPUT], check=True)
+        subprocess.run(["git", "add", CARTELLA_CLASSIFICHE_CORRENTI, CARTELLA_CLASSIFICHE_STORICHE], check=True)
         result = subprocess.run(["git", "diff", "--staged", "--quiet"])
         if result.returncode == 1:
             subprocess.run(["git", "commit", "-m", commit_msg], check=True)
+            print("🚀 Commit per classifiche eseguito.")
             subprocess.run(["git", "push"], check=True)
-            print("✅ Commit e push per le classifiche completato.")
+            print("✅ Push su GitHub per classifiche completato.")
         else:
             print("✅ Nessuna modifica nelle classifiche da committare.")
     except subprocess.CalledProcessError as e:
-        print(f"❌ Errore durante il processo Git: {e}")
+        print(f"❌ Errore durante il processo Git per classifiche: {e.output.decode() if e.output else e.stderr.decode() if e.stderr else str(e)}")
+    except Exception as e:
+        print(f"❌ Errore imprevisto durante il push Git per classifiche: {e}")
 
-# === LOGICA PRINCIPALE PER LA CLASSIFICA ===
+# === LOGICA PRINCIPALE PER LA CLASSIFICA (MODIFICATA) ===
 
-def genera_classifica_campionato(nome_campionato):
+def calcola_e_salva_classifica_da_file(percorso_file_csv: str, cartella_output: str, nome_file_output: str):
     """
-    Genera la classifica per la stagione corrente di un dato campionato.
+    Calcola la classifica da un singolo file CSV di una stagione e la salva.
     """
-    # Carica solo il file della stagione più recente
-    files = sorted(glob.glob(os.path.join(CARTELLA_CSV, f"{nome_campionato}_*.csv")), reverse=True)
-    if not files:
-        print(f"⚠️ Nessun file CSV trovato per {nome_campionato}")
-        return pd.DataFrame()
+    try:
+        df_stagione = pd.read_csv(percorso_file_csv)
+        if df_stagione.empty:
+            print(f"⚠️ File CSV vuoto: {percorso_file_csv}. Salto.")
+            return
+            
+        # Assicurati che le colonne necessarie esistano e siano del tipo corretto
+        colonne_richieste = ['squadra_casa', 'squadra_trasferta', 'gol_casa', 'gol_trasferta']
+        for col in colonne_richieste:
+            if col not in df_stagione.columns:
+                print(f"ERRORE: Colonna '{col}' mancante in {percorso_file_csv}. Salto.")
+                return
+        
+        # Conversione sicura a numerico, gestendo eventuali stringhe vuote o non numeriche
+        for col in ['gol_casa', 'gol_trasferta']:
+             df_stagione[col] = pd.to_numeric(df_stagione[col], errors='coerce').fillna(0).astype(int)
 
-    df_stagione_corrente = pd.read_csv(files[0])
-    
-    # Prendi la lista di tutte le squadre
-    squadre = pd.unique(df_stagione_corrente[['squadra_casa', 'squadra_trasferta']].values.ravel('K'))
-    
-    # Inizializza la struttura dati per la classifica
+    except Exception as e:
+        print(f"ERRORE: Impossibile leggere o processare il file {percorso_file_csv}: {e}. Salto.")
+        return
+
+    squadre = pd.unique(df_stagione[['squadra_casa', 'squadra_trasferta']].values.ravel('K'))
+    squadre = [s for s in squadre if pd.notna(s)] # Rimuovi eventuali NaN se presenti nei nomi squadra
+
     classifica = {squadra: {
         'Punti': 0, 'Giocate': 0, 'Vinte': 0, 'Nulle': 0, 'Perse': 0,
         'GF': 0, 'GS': 0, 'DR': 0
     } for squadra in squadre}
 
-    # Itera su ogni partita per calcolare i punti e le statistiche
-    for _, partita in df_stagione_corrente.iterrows():
+    for _, partita in df_stagione.iterrows():
         casa = partita['squadra_casa']
         trasferta = partita['squadra_trasferta']
         gol_casa = partita['gol_casa']
         gol_trasferta = partita['gol_trasferta']
 
-        # Aggiorna partite giocate, GF e GS per entrambe
+        if pd.isna(casa) or pd.isna(trasferta): # Salta righe con squadre mancanti
+            continue
+
         classifica[casa]['Giocate'] += 1
         classifica[trasferta]['Giocate'] += 1
         classifica[casa]['GF'] += gol_casa
@@ -75,48 +91,80 @@ def genera_classifica_campionato(nome_campionato):
         classifica[casa]['GS'] += gol_trasferta
         classifica[trasferta]['GS'] += gol_casa
 
-        # Assegna punti e risultato
-        if gol_casa > gol_trasferta: # Vittoria casa
+        if gol_casa > gol_trasferta:
             classifica[casa]['Punti'] += 3
             classifica[casa]['Vinte'] += 1
             classifica[trasferta]['Perse'] += 1
-        elif gol_trasferta > gol_casa: # Vittoria trasferta
+        elif gol_trasferta > gol_casa:
             classifica[trasferta]['Punti'] += 3
             classifica[trasferta]['Vinte'] += 1
             classifica[casa]['Perse'] += 1
-        else: # Pareggio
+        else: # Pareggio (anche 0-0)
             classifica[casa]['Punti'] += 1
             classifica[trasferta]['Punti'] += 1
             classifica[casa]['Nulle'] += 1
             classifica[trasferta]['Nulle'] += 1
             
-    # Converti il dizionario in un DataFrame di Pandas
     df_classifica = pd.DataFrame.from_dict(classifica, orient='index')
+    if df_classifica.empty:
+        print(f"⚠️  Classifica vuota generata per {percorso_file_csv}. Salto salvataggio.")
+        return
+        
     df_classifica['Squadra'] = df_classifica.index
-    
-    # Calcola la differenza reti
     df_classifica['DR'] = df_classifica['GF'] - df_classifica['GS']
-    
-    # Ordina la classifica secondo le regole standard (Punti > DR > GF)
     df_classifica.sort_values(by=['Punti', 'DR', 'GF'], ascending=[False, False, False], inplace=True)
-    
-    # Aggiungi la colonna della posizione e riordina le colonne per leggibilità
     df_classifica.insert(0, 'Pos', range(1, len(df_classifica) + 1))
     df_classifica = df_classifica[['Pos', 'Squadra', 'Punti', 'Giocate', 'Vinte', 'Nulle', 'Perse', 'GF', 'GS', 'DR']]
     
-    return df_classifica
+    os.makedirs(cartella_output, exist_ok=True) # Assicura che la cartella esista
+    percorso_salvataggio = os.path.join(cartella_output, nome_file_output)
+    df_classifica.to_csv(percorso_salvataggio, index=False)
+    print(f"✅ Classifica salvata: {percorso_salvataggio}")
+
 
 if __name__ == "__main__":
-    svuota_cartella(CARTELLA_CLASSIFICHE_OUTPUT)
+    svuota_e_crea_cartella(CARTELLA_CLASSIFICHE_CORRENTI)
+    svuota_e_crea_cartella(CARTELLA_CLASSIFICHE_STORICHE)
 
-    for nome_campionato in CAMPIONATI:
-        print(f"🏆 Genero classifica per: {nome_campionato}")
-        df_classifica = genera_classifica_campionato(nome_campionato)
+    # Trova tutti i file CSV nella cartella dei dati grezzi
+    tutti_i_file_csv_stagionali = glob.glob(os.path.join(CARTELLA_DATI_CSV, "*.csv"))
+
+    campionati_elaborati = {} # Per tenere traccia dell'ultima stagione per la classifica "corrente"
+
+    for percorso_file_csv in tutti_i_file_csv_stagionali:
+        nome_file_con_estensione = os.path.basename(percorso_file_csv)
+        nome_file_senza_estensione = os.path.splitext(nome_file_con_estensione)[0]
         
-        if not df_classifica.empty:
-            nome_file = f"classifica_{nome_campionato}.csv"
-            file_path = os.path.join(CARTELLA_CLASSIFICHE_OUTPUT, nome_file)
-            df_classifica.to_csv(file_path, index=False)
-            print(f"✅ Classifica salvata: {nome_file}")
+        # Estrai nome base campionato e stagione dal nome file
+        # Es. "serie_a_2324" -> nome_base = "serie_a", stagione_str = "2324"
+        parti_nome_file = nome_file_senza_estensione.split('_')
+        if len(parti_nome_file) < 2:
+            print(f"⚠️ Nome file non standard, impossibile estrarre stagione: {nome_file_con_estensione}. Salto.")
+            continue
+        
+        stagione_str = parti_nome_file[-1] # Ultima parte è la stagione
+        nome_base_campionato = "_".join(parti_nome_file[:-1]) # Tutto il resto è il nome base
 
-    git_push()
+        # Controlla se la stagione_str è numerica e di lunghezza 4 (es. 2324)
+        if not (stagione_str.isdigit() and len(stagione_str) == 4):
+            print(f"⚠️ Formato stagione non riconosciuto in {nome_file_con_estensione}. Salto.")
+            continue
+
+        # 1. Salva la classifica storica
+        nome_file_classifica_storica = f"classifica_{nome_base_campionato}_{stagione_str}_finale.csv"
+        calcola_e_salva_classifica_da_file(percorso_file_csv, CARTELLA_CLASSIFICHE_STORICHE, nome_file_classifica_storica)
+
+        # 2. Determina se è il file più recente per questo campionato per la classifica "corrente"
+        if nome_base_campionato not in campionati_elaborati or stagione_str > campionati_elaborati[nome_base_campionato]['stagione']:
+            campionati_elaborati[nome_base_campionato] = {
+                'stagione': stagione_str,
+                'percorso_file': percorso_file_csv
+            }
+
+    # 3. Genera le classifiche "correnti" usando i file più recenti identificati
+    print("\n--- Genero Classifiche Correnti (basate sulla stagione più recente disponibile) ---")
+    for nome_base_campionato, info in campionati_elaborati.items():
+        nome_file_classifica_corrente = f"classifica_{nome_base_campionato}_corrente.csv"
+        calcola_e_salva_classifica_da_file(info['percorso_file'], CARTELLA_CLASSIFICHE_CORRENTI, nome_file_classifica_corrente)
+        
+    git_push_classifiche()
